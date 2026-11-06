@@ -1,44 +1,130 @@
-name: Perl tests
+name: Perl - Quality and Tests
 
 on:
   push:
+    branches:
+      - fat
+      - uat
   pull_request:
+    branches:
+      - fat
+      - uat
   workflow_dispatch:
 
 permissions:
   contents: read
   checks: write
 
+env:
+  # Replace with the Perl version used by your company.
+  PERL_VERSION: "5.40"
+
 jobs:
-  test:
+  validate:
+    name: Perl Quality and Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
-      - name: Checkout repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Perl
+      - name: Setup Perl Environment
+        id: perl
         uses: shogo82148/actions-setup-perl@v1
         with:
-          perl-version: "5.40"
+          perl-version: ${{ env.PERL_VERSION }}
+          enable-modules-cache: false
 
-      - name: Install test dependencies
-        run: cpanm --notest Test::More TAP::Formatter::JUnit
+      - name: Cache CPAN Modules
+        uses: actions/cache@v4
+        with:
+          path: local
+          key: cpan-${{ runner.os }}-${{ steps.perl.outputs.perl-hash }}-${{ hashFiles('cpanfile', 'cpanfile.snapshot', '**/Makefile.PL') }}
 
-      - name: Run tests and generate JUnit report
-        shell: bash
+      - name: Configure Local Perl Dependencies
+        run: |
+          echo "$GITHUB_WORKSPACE/local/bin" >> "$GITHUB_PATH"
+          echo "PERL5LIB=$GITHUB_WORKSPACE/local/lib/perl5:$GITHUB_WORKSPACE/lib:$GITHUB_WORKSPACE/authorization:$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+
+      - name: Install Perl Dependencies and Quality Tooling
+        id: dependencies
+        run: |
+          cpanm --local-lib-contained local --installdeps .
+
+      - name: Run PerlCritic Static Analysis
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        env:
+          TARGET_BRANCH: ${{ github.base_ref || github.ref_name }}
         run: |
           mkdir -p test-results
-          prove -Iauthorization -Ilib -r \
+          set -o pipefail
+
+          severity=4
+          if [[ "$TARGET_BRANCH" == "uat" ]]; then
+            severity=3
+          fi
+
+          # Use the company profile when present.
+          profile=(--noprofile)
+          if [[ -f .perlcriticrc ]]; then
+            profile=(--profile .perlcriticrc)
+          fi
+
+          # Support both company layout and the local demo layout.
+          targets=()
+          for directory in lib bin authorization; do
+            if [[ -d "$directory" ]]; then
+              targets+=("$directory")
+            fi
+          done
+
+          shopt -s nullglob
+          targets+=(*.pl *.pm)
+
+          if [[ ${#targets[@]} -eq 0 ]]; then
+            echo "::error::No Perl source files found."
+            exit 1
+          fi
+
+          perlcritic \
+            "${profile[@]}" \
+            --severity "$severity" \
+            "${targets[@]}" \
+            2>&1 | tee test-results/perlcritic.txt
+
+      - name: Execute Tests and Generate JUnit Report
+        id: tests
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: |
+          mkdir -p test-results
+
+          if [[ ! -d t ]] || \
+             [[ -z "$(find t -type f -name '*.t' -print -quit)" ]]; then
+            echo "::error::No Perl tests found in t/."
+            exit 1
+          fi
+
+          prove -l -r -m \
             --formatter TAP::Formatter::JUnit \
             t > test-results/junit.xml
 
-      - name: Show failed tests in GitHub
+      - name: Generate HTML Test Report
+        if: ${{ !cancelled() && steps.tests.outcome != 'skipped' && hashFiles('t/**/*.t') != '' }}
+        run: |
+          prove -l -r -m -Q \
+            -P 'HTML=outfile:test-results/test-report.html,force_inline_js:1,force_inline_css:1' \
+            t
+
+      - name: Show Failed Tests in GitHub
         if: ${{ !cancelled() && hashFiles('test-results/junit.xml') != '' }}
         uses: dorny/test-reporter@v3
         with:
-          name: Perl test results
+          name: Perl Test Results
           path: test-results/junit.xml
           reporter: java-junit
           list-suites: failed
@@ -46,11 +132,11 @@ jobs:
           use-actions-summary: "true"
           fail-on-error: "true"
 
-      - name: Upload test results
+      - name: Store Quality and Test Reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: perl-test-results
+          name: perl-quality-and-test-results
           path: test-results/
           retention-days: 14
           if-no-files-found: warn
