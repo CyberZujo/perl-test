@@ -1,0 +1,42 @@
+name: Perl tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: "5.40"
+
+      - name: Install test dependencies
+        run: cpanm --notest Test::More
+
+      - name: Run tests and save results
+        shell: bash
+        run: |
+          mkdir -p test-results
+          set -o pipefail
+          prove -Iauthorization -Ilib -rv t 2>&1 | tee test-results/results.txt
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perl-test-results
+          path: test-results/
+          retention-days: 14
+          if-no-files-found: warn
