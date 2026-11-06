@@ -54,7 +54,13 @@ jobs:
       - name: Install Perl Dependencies and Quality Tooling
         id: dependencies
         run: |
-          cpanm --local-lib-contained local --installdeps .
+          if ! cpanm --verbose --local-lib-contained local --installdeps .; then
+            echo "===== CPAN BUILD LOG ====="
+            if [[ -f "$HOME/.cpanm/build.log" ]]; then
+              cat "$HOME/.cpanm/build.log"
+            fi
+            exit 1
+          fi
 
       - name: Run PerlCritic Static Analysis
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
