@@ -2,7 +2,7 @@ use strict;
 use warnings;
 use Test::More;
 
-is(2 + 2, 4, 'Addition works');
-like('gxxod!', qr/^g\w\wod!/, 'Regex matches');
+is(2 + 2, 3, 'Addition does not work');
+fail('Intentional failure to verify PR checks');
 
 done_testing();
